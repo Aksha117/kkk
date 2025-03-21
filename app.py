@@ -49,13 +49,15 @@ def predict():
             return jsonify({"error": "Symbol is required"}), 400
 
         # 🧾 Fetch historical data from Yahoo Finance
+        print(f"Fetching data for symbol: {symbol}")
         stock = yf.Ticker(f"{symbol}.NS")
-        df = stock.history(period="3mo")
+        df = stock.history(period="3mo", interval="1d", timeout=10)  # Timeout after 10 seconds
 
-        if len(df) < 60:
-            return jsonify({"error": "Not enough data for prediction"}), 400
+        if df.empty or len(df) < 60:
+            return jsonify({"error": "Not enough data or invalid symbol"}), 400
 
         # 🧠 Compute technical indicators
+        print("Calculating technical indicators...")
         df['RSI'] = calculate_rsi(df)
         df['MACD'] = calculate_macd(df)
         df['BB_upper'], df['BB_lower'] = calculate_bollinger_bands(df)
@@ -71,8 +73,11 @@ def predict():
         input_reshaped = np.expand_dims(input_data, axis=0)  # Shape: [1, 60, 7]
 
         # 🤖 Predict
+        print("Running prediction...")
         prediction = model.predict(input_reshaped)
         predicted_price = float(prediction[0][0])
+
+        print(f"Prediction complete: {predicted_price}")
 
         return jsonify({
             "symbol": symbol,
@@ -81,6 +86,7 @@ def predict():
         })
 
     except Exception as e:
+        print(f"Error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
