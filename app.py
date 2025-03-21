@@ -50,7 +50,7 @@ def predict():
 
         # 🧾 Fetch historical data from Yahoo Finance
         print(f"Fetching data for symbol: {symbol}")
-        stock = yf.Ticker(f"{symbol}.NS")
+        stock = yf.Ticker(f"{symbol}")
         df = stock.history(period="3mo", interval="1d", timeout=10)  # Timeout after 10 seconds
 
         if df.empty or len(df) < 60:
