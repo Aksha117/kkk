@@ -4,14 +4,13 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from ta.trend import SMAIndicator, MACD
 from ta.momentum import RSIIndicator
-from ta.volatility import BollingerBands
+from ta.trend import MACD
 
 app = Flask(__name__)
 CORS(app)
 
-# Load the trained LSTM model
+# Load your trained LSTM model
 model = tf.keras.models.load_model("nse_lstm_model_fixed.h5")
 
 def fetch_data_with_indicators(ticker):
@@ -21,27 +20,21 @@ def fetch_data_with_indicators(ticker):
         df.columns = [col[0] for col in df.columns]
 
     if df.empty or 'Close' not in df.columns:
-        raise ValueError("No data found or invalid ticker.")
+        raise ValueError("Invalid symbol or no data found.")
 
-    # Calculate indicators
-    df['SMA_10'] = SMAIndicator(df['Close'], window=10).sma_indicator()
-    df['SMA_20'] = SMAIndicator(df['Close'], window=20).sma_indicator()
+    df = df.tail(60).copy()
+
+    # Calculate 7 indicators
     df['RSI'] = RSIIndicator(df['Close'], window=14).rsi()
     macd = MACD(df['Close'])
     df['MACD'] = macd.macd()
-    bb = BollingerBands(df['Close'], window=20)
-    df['BB_upper'] = bb.bollinger_hband()
-    df['BB_lower'] = bb.bollinger_lband()
 
-    # Fill NaNs with 0 (to avoid losing rows)
+    # Fill missing values
     df.fillna(0, inplace=True)
 
-    # Ensure we return exactly 60 rows
-    df = df.tail(60)
-
-    selected_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'MACD',
-                        'SMA_10', 'SMA_20', 'BB_upper', 'BB_lower']
-    return df[selected_columns]
+    # Ensure only the 7 required columns
+    selected_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'MACD']
+    return df[selected_columns].tail(60)
 
 @app.route("/", methods=["GET"])
 def home():
@@ -57,20 +50,19 @@ def predict():
         print(f"Fetching data for: {symbol}")
         df = fetch_data_with_indicators(symbol)
 
-        if df.shape[0] < 60:
-            return jsonify({"error": "Not enough data to make a prediction"}), 400
+        if df.shape != (60, 7):
+            return jsonify({"error": "Data shape mismatch or not enough data"}), 400
 
-        input_data = df.values  # shape (60, features)
-        input_reshaped = np.expand_dims(input_data, axis=0)  # shape (1, 60, features)
+        input_data = np.expand_dims(df.values, axis=0)  # shape (1, 60, 7)
 
         print("Running prediction...")
-        prediction = model.predict(input_reshaped)
+        prediction = model.predict(input_data)
         predicted_price = float(prediction[0][0])
 
         return jsonify({
             "symbol": symbol.upper(),
             "prediction": [[predicted_price]],
-            "reason": f"Predicted using LSTM model with technical indicators for {symbol}"
+            "reason": "Predicted using 60-day historical data and technical indicators."
         })
 
     except Exception as e:
