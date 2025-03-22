@@ -10,10 +10,15 @@ from ta.trend import MACD
 app = Flask(__name__)
 CORS(app)
 
-# Load your trained LSTM model
-model = tf.keras.models.load_model("nse_lstm_model_fixed.h5")
+# Load LSTM model and confirm
+try:
+    model = tf.keras.models.load_model("nse_lstm_model_fixed.h5")
+    print("✅ Model loaded successfully")
+except Exception as e:
+    print("❌ Error loading model:", e)
 
 def fetch_data_with_indicators(ticker):
+    print(f"📥 Downloading data for {ticker}")
     df = yf.download(ticker, period='90d', interval='1d', group_by='column')
 
     if isinstance(df.columns, pd.MultiIndex):
@@ -23,16 +28,11 @@ def fetch_data_with_indicators(ticker):
         raise ValueError("Invalid symbol or no data found.")
 
     df = df.tail(60).copy()
-
-    # Calculate 7 indicators
     df['RSI'] = RSIIndicator(df['Close'], window=14).rsi()
     macd = MACD(df['Close'])
     df['MACD'] = macd.macd()
 
-    # Fill missing values
     df.fillna(0, inplace=True)
-
-    # Ensure only the 7 required columns
     selected_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'MACD']
     return df[selected_columns].tail(60)
 
@@ -47,17 +47,17 @@ def predict():
         if not symbol:
             return jsonify({"error": "Symbol is required"}), 400
 
-        print(f"Fetching data for: {symbol}")
+        print(f"🔎 Predict request received for: {symbol}")
         df = fetch_data_with_indicators(symbol)
 
         if df.shape != (60, 7):
             return jsonify({"error": "Data shape mismatch or not enough data"}), 400
 
-        input_data = np.expand_dims(df.values, axis=0)  # shape (1, 60, 7)
-
-        print("Running prediction...")
+        input_data = np.expand_dims(df.values, axis=0)
+        print("🧠 Running prediction...")
         prediction = model.predict(input_data)
         predicted_price = float(prediction[0][0])
+        print(f"✅ Prediction complete: {predicted_price}")
 
         return jsonify({
             "symbol": symbol.upper(),
@@ -66,7 +66,7 @@ def predict():
         })
 
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"❌ Error in /predict: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
