@@ -11,7 +11,7 @@ from ta.volatility import BollingerBands
 app = Flask(__name__)
 CORS(app)
 
-# Load pre-trained LSTM model
+# Load the trained LSTM model
 model = tf.keras.models.load_model("nse_lstm_model_fixed.h5")
 
 def fetch_data_with_indicators(ticker):
@@ -20,12 +20,10 @@ def fetch_data_with_indicators(ticker):
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [col[0] for col in df.columns]
 
-    if 'Close' not in df.columns or len(df) < 60:
-        raise ValueError("Not enough data or invalid symbol.")
+    if df.empty or 'Close' not in df.columns:
+        raise ValueError("No data found or invalid ticker.")
 
-    df = df.tail(60).copy()
-
-    # Calculate technical indicators
+    # Calculate indicators
     df['SMA_10'] = SMAIndicator(df['Close'], window=10).sma_indicator()
     df['SMA_20'] = SMAIndicator(df['Close'], window=20).sma_indicator()
     df['RSI'] = RSIIndicator(df['Close'], window=14).rsi()
@@ -35,12 +33,14 @@ def fetch_data_with_indicators(ticker):
     df['BB_upper'] = bb.bollinger_hband()
     df['BB_lower'] = bb.bollinger_lband()
 
-    df = df.dropna().tail(60)
+    # Fill NaNs with 0 (to avoid losing rows)
+    df.fillna(0, inplace=True)
 
-    # Final selected features
+    # Ensure we return exactly 60 rows
+    df = df.tail(60)
+
     selected_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'MACD',
                         'SMA_10', 'SMA_20', 'BB_upper', 'BB_lower']
-
     return df[selected_columns]
 
 @app.route("/", methods=["GET"])
@@ -60,10 +60,6 @@ def predict():
         if df.shape[0] < 60:
             return jsonify({"error": "Not enough data to make a prediction"}), 400
 
-        # Fill any remaining NaNs
-        df.fillna(0, inplace=True)
-
-        # Prepare input for model
         input_data = df.values  # shape (60, features)
         input_reshaped = np.expand_dims(input_data, axis=0)  # shape (1, 60, features)
 
