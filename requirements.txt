@@ -1,8 +1,7 @@
 flask
-flask-cors
 tensorflow
+yfinance
 numpy
 pandas
-yfinance
-gunicorn
+scikit-learn
 ta
