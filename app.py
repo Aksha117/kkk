@@ -2,40 +2,46 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import tensorflow as tf
 import numpy as np
-import yfinance as yf
 import pandas as pd
+import yfinance as yf
+from ta.trend import SMAIndicator, MACD
+from ta.momentum import RSIIndicator
+from ta.volatility import BollingerBands
 
 app = Flask(__name__)
 CORS(app)
 
-# Load the pre-trained LSTM model
+# Load pre-trained LSTM model
 model = tf.keras.models.load_model("nse_lstm_model_fixed.h5")
 
-# 📊 RSI Calculation
-def calculate_rsi(data, period=14):
-    delta = data['Close'].diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = pd.Series(gain).rolling(window=period).mean()
-    avg_loss = pd.Series(loss).rolling(window=period).mean()
-    rs = avg_gain / (avg_loss + 1e-10)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+def fetch_data_with_indicators(ticker):
+    df = yf.download(ticker, period='90d', interval='1d', group_by='column')
 
-# 📉 MACD Calculation
-def calculate_macd(data):
-    ema12 = data['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = data['Close'].ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    return macd
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns]
 
-# 📈 Bollinger Bands
-def calculate_bollinger_bands(data, window=20):
-    sma = data['Close'].rolling(window).mean()
-    std = data['Close'].rolling(window).std()
-    upper_band = sma + 2 * std
-    lower_band = sma - 2 * std
-    return upper_band, lower_band
+    if 'Close' not in df.columns or len(df) < 60:
+        raise ValueError("Not enough data or invalid symbol.")
+
+    df = df.tail(60).copy()
+
+    # Calculate technical indicators
+    df['SMA_10'] = SMAIndicator(df['Close'], window=10).sma_indicator()
+    df['SMA_20'] = SMAIndicator(df['Close'], window=20).sma_indicator()
+    df['RSI'] = RSIIndicator(df['Close'], window=14).rsi()
+    macd = MACD(df['Close'])
+    df['MACD'] = macd.macd()
+    bb = BollingerBands(df['Close'], window=20)
+    df['BB_upper'] = bb.bollinger_hband()
+    df['BB_lower'] = bb.bollinger_lband()
+
+    df = df.dropna().tail(60)
+
+    # Final selected features
+    selected_columns = ['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'MACD',
+                        'SMA_10', 'SMA_20', 'BB_upper', 'BB_lower']
+
+    return df[selected_columns]
 
 @app.route("/", methods=["GET"])
 def home():
@@ -44,45 +50,31 @@ def home():
 @app.route("/predict", methods=["POST"])
 def predict():
     try:
-        symbol = request.json.get('symbol')
+        symbol = request.json.get("symbol")
         if not symbol:
             return jsonify({"error": "Symbol is required"}), 400
 
-        # 🧾 Fetch historical data from Yahoo Finance
-        print(f"Fetching data for symbol: {symbol}")
-        stock = yf.Ticker(f"{symbol}")
-        df = stock.history(period="3mo", interval="1d", timeout=10)  # Timeout after 10 seconds
+        print(f"Fetching data for: {symbol}")
+        df = fetch_data_with_indicators(symbol)
 
-        if df.empty or len(df) < 60:
-            return jsonify({"error": "Not enough data or invalid symbol"}), 400
+        if df.shape[0] < 60:
+            return jsonify({"error": "Not enough data to make a prediction"}), 400
 
-        # 🧠 Compute technical indicators
-        print("Calculating technical indicators...")
-        df['RSI'] = calculate_rsi(df)
-        df['MACD'] = calculate_macd(df)
-        df['BB_upper'], df['BB_lower'] = calculate_bollinger_bands(df)
-
-        # Keep last 60 rows
-        df = df.tail(60)
-
-        # Replace NaN values with 0
+        # Fill any remaining NaNs
         df.fillna(0, inplace=True)
 
-        # 🔢 Prepare input: [open, high, low, close, volume, RSI, MACD]
-        input_data = df[['Open', 'High', 'Low', 'Close', 'Volume', 'RSI', 'MACD']].values
-        input_reshaped = np.expand_dims(input_data, axis=0)  # Shape: [1, 60, 7]
+        # Prepare input for model
+        input_data = df.values  # shape (60, features)
+        input_reshaped = np.expand_dims(input_data, axis=0)  # shape (1, 60, features)
 
-        # 🤖 Predict
         print("Running prediction...")
         prediction = model.predict(input_reshaped)
         predicted_price = float(prediction[0][0])
 
-        print(f"Prediction complete: {predicted_price}")
-
         return jsonify({
-            "symbol": symbol,
+            "symbol": symbol.upper(),
             "prediction": [[predicted_price]],
-            "reason": f"Predicted using 60-day technical indicators with LSTM model for {symbol}"
+            "reason": f"Predicted using LSTM model with technical indicators for {symbol}"
         })
 
     except Exception as e:
